@@ -1,0 +1,13 @@
+// https://github.com/circuitdojo/nrf9160-feather-examples-and-drivers/blob/v2.4.x/samples/active_sleep/child_image/mcuboot/boards/circuitdojo_feather_nrf9160.overlay 
+// Help - Active sleep changes for 2.4.x
+
+/ {
+	leds {
+		compatible = "gpio-leds";
+		blue_led: led_0 {
+			gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+			label = "Blue LED (D7)";
+		};
+	};
+};
+

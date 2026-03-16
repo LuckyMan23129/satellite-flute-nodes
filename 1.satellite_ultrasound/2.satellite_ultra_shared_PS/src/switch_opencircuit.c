@@ -9,27 +9,6 @@
  * 
  * @author DistriNet LAB, KU Leuven
  *
- * MIT License
- *
- * Copyright (c) 2026 DistriNet, KU Leuven
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 #include <zephyr/kernel.h>
@@ -41,7 +20,7 @@
 #include <zephyr/logging/log.h>
 
 #include "config.h"
-#include "opencircuit.h"
+#include "switch_opencircuit.h"
 
 LOG_MODULE_REGISTER(opencircuit);
 
@@ -49,8 +28,8 @@ LOG_MODULE_REGISTER(opencircuit);
 static atomic_t charging_enabled = ATOMIC_INIT(1);
 
 static int8_t ret_open;
-#define open_circuit DT_ALIAS(opencircuit)
-static const struct gpio_dt_spec opencircuit_sw = GPIO_DT_SPEC_GET(open_circuit, gpios);
+#define sw_open_circuit DT_ALIAS(opencircuit)
+static const struct gpio_dt_spec sw_OpenCircuit = GPIO_DT_SPEC_GET(sw_open_circuit, gpios);
 
 /**
  * @brief Initialize GPIO for open-circuit switch control
@@ -61,14 +40,13 @@ static const struct gpio_dt_spec opencircuit_sw = GPIO_DT_SPEC_GET(open_circuit,
  *
  * @return 0 on success, 1 on failure (GPIO not ready or configuration failed)
  */
-
 int8_t check_gpio_sw_opencircuit(void)
 {
-    if (!device_is_ready(opencircuit_sw.port)) {
+    if (!device_is_ready(sw_OpenCircuit.port)) {
         LOG_ERR("Opencircuit - GPIO initialization for controlling the digital switch is not successful!");
         return (1);
     }
-    ret_open = gpio_pin_configure_dt(&opencircuit_sw, GPIO_OUTPUT_ACTIVE);
+    ret_open = gpio_pin_configure_dt(&sw_OpenCircuit, GPIO_OUTPUT_ACTIVE);
     if (ret_open < 0) {
         LOG_ERR("Opencircuit - Pin configuration for controlling the digital switch is not successful!");
         return (1);
@@ -84,7 +62,7 @@ int8_t check_gpio_sw_opencircuit(void)
  */
 void enable_charging(void)
 {
-    gpio_pin_set_dt(&opencircuit_sw, 1);        // Pin HIGH => Switch on
+    gpio_pin_set_dt(&sw_OpenCircuit, 1);        // Pin HIGH => Switch on
     atomic_set(&charging_enabled, 1);
 }
 
@@ -97,8 +75,8 @@ void enable_charging(void)
  */
 void disable_charging(void)
 {
-    gpio_pin_set_dt(&opencircuit_sw, 0);        // Pin LOW => Switch off
-    atomic_set(&charging_enabled, 0);
+    gpio_pin_set_dt(&sw_OpenCircuit, 0);        // Pin LOW => Switch off
+     atomic_set(&charging_enabled, 0);
 }
 
 /**

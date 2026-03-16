@@ -15,6 +15,7 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/atomic.h>
 #include <stdlib.h>
 #include <zephyr/logging/log.h>
 
@@ -23,8 +24,8 @@
 
 LOG_MODULE_REGISTER(opencircuit);
 
-// State tracking for charging status
-static bool charging_enabled = true;
+// State tracking for charging status (atomic for thread-safe access)
+static atomic_t charging_enabled = ATOMIC_INIT(1);
 
 static int8_t ret_open;
 #define sw_open_circuit DT_ALIAS(opencircuit)
@@ -62,7 +63,7 @@ int8_t check_gpio_sw_opencircuit(void)
 void enable_charging(void)
 {
     gpio_pin_set_dt(&sw_OpenCircuit, 1);        // Pin HIGH => Switch on
-    charging_enabled = true;
+    atomic_set(&charging_enabled, 1);
 }
 
 /**
@@ -75,7 +76,7 @@ void enable_charging(void)
 void disable_charging(void)
 {
     gpio_pin_set_dt(&sw_OpenCircuit, 0);        // Pin LOW => Switch off
-    charging_enabled = false;
+     atomic_set(&charging_enabled, 0);
 }
 
 /**
@@ -88,5 +89,5 @@ void disable_charging(void)
  */
 bool is_charging_enabled(void)
 {
-    return charging_enabled;
+    return (bool)atomic_get(&charging_enabled);
 }

@@ -1,0 +1,26 @@
+ok
+
+
+This code is used to read ultra sensor and send related data to the server
+
+==================================================================================================
+2.lid_sat:	This code is used to read "LiDAR sensor" + "Low power" + "AsTAR++", then send them via satellite
+ 
+* Achievement:
+
+   
+
+* Limitations
+	+ 
+
+==================================================================================================
+1.lid_sat:	This code is used to read LiDAR sensor and send it + dummy AsTAR parameters via satellite
+ 
+* Achievement: built successfully, but not flashed to test yet
+   
+
+* Limitations
+	+ Not integrate Lowpower and AsTAR++
+	+ Just sending dummy AsTAR++ parameters via satellite
+
+* 
