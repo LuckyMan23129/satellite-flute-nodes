@@ -152,7 +152,7 @@ uint16_t read_adc(void)
 		{
 			memset(sample_buffer, 0, sizeof(sample_buffer));
 			err = adc_read(dev_adc, &sequence);
-			k_sleep(K_MSEC(10));
+			k_sleep(K_MSEC(20));
 			if (err != 0) {
 				LOG_ERR("ADC reading failed with error %d", err);
 				return 1;
@@ -165,7 +165,10 @@ uint16_t read_adc(void)
         	if (adc_vref > 0) {
 				int32_t mv_value = raw_value;
 				adc_raw_to_millivolts(adc_vref, ADC_GAIN, ADC_RESOLUTION, &mv_value);
-				k_sleep(K_MSEC(5));
+				
+				// Should HIGHER THAN 15ms - This delay is very important
+				k_sleep(K_MSEC(20));
+				
 				avg_reading[i] += mv_value;
 			}
         }
@@ -200,7 +203,10 @@ uint16_t update_Vpv(void)
 {
     disable_charging();       					// Isolate the solar panels from Capacitors to measure open-circuit Vpv
     enable_Vpv_divider();
+	
+	// Should HIGHER THAN 200ms - This delay is very important
     k_sleep(K_MSEC(200));						// This delay is very important
+	
 	uint16_t Vpv = 2*(read_adc());
 	disable_Vpv_divider();
     enable_charging();                          // Re-enable charging (caller handles overvoltage check)
