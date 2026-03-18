@@ -59,7 +59,7 @@ LOG_MODULE_REGISTER(read_solar);
 // ADC configuration (implementation details)
 #define ADC_NUM_CHANNELS        1
 #define ADC_NODE                DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
-#define ADC_RESOLUTION          14
+#define ADC_RESOLUTION          12
 #define ADC_GAIN                ADC_GAIN_1_6
 #define ADC_REFERENCE           ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME    ADC_ACQ_TIME_DEFAULT
@@ -165,7 +165,7 @@ uint16_t read_adc(void)
         	if (adc_vref > 0) {
 				int32_t mv_value = raw_value;
 				adc_raw_to_millivolts(adc_vref, ADC_GAIN, ADC_RESOLUTION, &mv_value);
-				k_sleep(K_MSEC(10));
+				k_sleep(K_MSEC(5));
 				avg_reading[i] += mv_value;
 			}
         }
