@@ -190,31 +190,38 @@ void overV_protection_thread(void)
         if (ENABLE_PRINT)
             LOG_INF("+++++ Entered OverVcap Protection Thread +++++");
 
+        /* Step 1: hold semaphore only long enough to read flags/thresholds — no ADC here. */
         bool nighttime = false;
+        bool do_adc    = false;
         if (k_sem_take(&vcap_semaphore, K_SECONDS(5)) == 0)
         {
             // Only check during daytime when voltage is high enough to matter
-            if ((!state.nighttimeFlag) && (state.oldV > config.check_overVcap_threshold))
-            {
-                // Read current voltage
-                if (config.USE_BOOST)
-                    state.newV = read_Vcap_mv();
-                else
-                    state.newV = read_Vsupp_mv();
-
-                // Enable/disable charging based on voltage level
-                if (state.newV > config.OpenCircuitVoltage)
-                    disable_charging();
-                else
-                    enable_charging();
-            }
-            nighttime = state.nighttimeFlag;  // cache before releasing semaphore
+            do_adc   = (!state.nighttimeFlag) && (state.oldV > config.check_overVcap_threshold);
+            nighttime = state.nighttimeFlag;
             k_sem_give(&vcap_semaphore);
         }
         else
         {
             if (ENABLE_PRINT)
                 LOG_INF("Thread timed out waiting for vcap_semaphore");
+        }
+
+        /* Step 2: ADC read happens outside the semaphore — takes ~100 ms but
+         * does NOT block schedule() any more.  Then re-take the semaphore for
+         * the brief state write and GPIO action. */
+        if (do_adc)
+        {
+            uint16_t v = config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+
+            if (k_sem_take(&vcap_semaphore, K_SECONDS(5)) == 0)
+            {
+                state.newV = v;
+                if (state.newV > config.OpenCircuitVoltage)
+                    disable_charging();
+                else
+                    enable_charging();
+                k_sem_give(&vcap_semaphore);
+            }
         }
 
         // Check less frequently at night to save energy
@@ -279,17 +286,22 @@ uint32_t schedule(void)
     // Hold state lock for entire scheduling computation to prevent races with overV thread
     k_sem_take(&vcap_semaphore, K_FOREVER);
 
-    // Handle overvoltage protection after Vpv measurement
-    if (state.newV > config.maxVoltage)
-        disable_charging();
-    else
-        enable_charging();
-
-    // Update capacitor voltage
+    // Read FRESH Vcap first -- update_Vpv() left charging disabled to avoid
+    // an inrush current spike (Vsolar >> Vcap when Vsolar > 6000 mV).
+    // We must know the actual current Vcap before deciding whether it is safe
+    // to reconnect the solar panel.
     if (config.USE_BOOST)
         state.newV = read_Vcap_mv();
     else
         state.newV = read_Vsupp_mv();
+
+    // Reconnect solar only when Vcap is below the maximum threshold.
+    // This prevents the large inrush that occurs when Vsolar >> Vcap and that
+    // was causing the modem to lose its LTE connection.
+    if (state.newV > config.maxVoltage)
+        disable_charging();
+    else
+        enable_charging();
 
     if (ENABLE_PRINT)
         LOG_INF("The supercapacitor Voltage - Vcap = %d mV", state.newV);
@@ -364,8 +376,11 @@ uint32_t schedule(void)
     float kp1, kp2;
     kp1 = (state.newV - state.optimumV) / 50.0f;
     if (kp1 < 1.5f) kp1 = 1.5f;
+    if (kp1 > 5.0f) kp1 = 4.0f;
+
     kp2 = (state.optimumV - state.newV) / 50.0f;
     if (kp2 < 1.5f) kp2 = 1.5f;
+    if (kp2 > 5.0f) kp2 = 4.0f;
 
     // --- Determine Sleep Timer Based on Voltage State ---
 

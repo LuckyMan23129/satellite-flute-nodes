@@ -209,7 +209,10 @@ uint16_t update_Vpv(void)
 	
 	uint16_t Vpv = 2*(read_adc());
 	disable_Vpv_divider();
-    enable_charging();                          // Re-enable charging (caller handles overvoltage check)
+    /* Charging reconnection is intentionally left to the caller (schedule()).
+     * Reconnecting here -- before the caller reads a fresh Vcap -- can cause a
+     * large inrush current spike when Vsolar >> Vcap (e.g. Vsolar > 6000 mV),
+     * which disturbs the power rail and can drop the LTE-M modem connection. */
     if (ENABLE_PRINT)
       LOG_INF("Voltage of Solar Panels - Vpv = %d mV", Vpv);
 
