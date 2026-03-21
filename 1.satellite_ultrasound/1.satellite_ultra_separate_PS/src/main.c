@@ -68,7 +68,7 @@ static const astar_config_t astar_params = {
 
     .maxVoltage               = 5100,
     .shutOffVoltage           = 3300,
-    .daytimeOptimumV          = 5000,
+    .daytimeOptimumV          = 4900,
     .OpenCircuitVoltage       = 5400,
     .wakeup_Vpv_Threshold     = 4000,
     .sleep_Vpv_Threshold      = 3800,
@@ -79,7 +79,7 @@ static const astar_config_t astar_params = {
     .nighttimeMaxRate               = 120,
     .LowVolt_SleepTime              = 7200,
     .daily_initial_wakeup_SleepTime = 600,
-    .daily_initial_sleep_SleepTime  = 120,
+    .daily_initial_sleep_SleepTime  = 300,
 
     .nightDurationRollingEstimate = 48000,
 };
