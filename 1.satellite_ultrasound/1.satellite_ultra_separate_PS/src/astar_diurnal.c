@@ -376,11 +376,11 @@ uint32_t schedule(void)
     float kp1, kp2;
     kp1 = (state.newV - state.optimumV) / 50.0f;
     if (kp1 < 1.5f) kp1 = 1.5f;
-    if (kp1 > 5.0f) kp1 = 4.0f;
+    if (kp1 > 4.0f) kp1 = 4.0f;
 
     kp2 = (state.optimumV - state.newV) / 50.0f;
     if (kp2 < 1.5f) kp2 = 1.5f;
-    if (kp2 > 5.0f) kp2 = 4.0f;
+    if (kp2 > 4.0f) kp2 = 4.0f;
 
     // --- Determine Sleep Timer Based on Voltage State ---
 
