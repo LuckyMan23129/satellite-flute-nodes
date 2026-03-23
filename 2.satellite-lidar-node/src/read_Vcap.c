@@ -45,7 +45,7 @@
 LOG_MODULE_REGISTER(read_Vcap);
 
 // ADC configuration (implementation details)
-#define ADC_RESOLUTION         14
+#define ADC_RESOLUTION         12
 #define ADC_GAIN               ADC_GAIN_1_6
 #define ADC_REFERENCE          ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME   ADC_ACQ_TIME_DEFAULT
@@ -75,7 +75,7 @@ int8_t Vcap_init(void) {
  * @brief Read supercapacitor voltage
  *
  * Performs 5 consecutive ADC readings and returns the average voltage
- * in millivolts. Uses 14-bit resolution with internal reference.
+ * in millivolts. Uses 12-bit resolution with internal reference.
  *
  * The function:
  * 1. Configures the ADC channel with appropriate gain and reference
@@ -87,7 +87,9 @@ int8_t Vcap_init(void) {
  * @return Capacitor voltage in millivolts, or -1 on error
  */
 uint16_t read_Vcap_mv(void)
-{
+{   
+    Vcap_init();
+    
     int16_t sample_buffer;  // stack-local: each concurrent call has its own copy
     struct adc_channel_cfg channel_cfg = {
         .gain             = ADC_GAIN,
@@ -117,15 +119,19 @@ uint16_t read_Vcap_mv(void)
     for (uint8_t i = 0; i < 5; i++)
     {
         sample_buffer = 0;
-        if (adc_read(adc_dev, &sequence)) {
-            LOG_ERR("ADC read failed");
-            return -1;
+        int8_t err = adc_read(adc_dev, &sequence);
+        k_sleep(K_MSEC(20));
+        if (err != 0) {
+            LOG_ERR("ADC reading failed with error %d", err);
+            return 1;
         }
 
         int16_t raw = sample_buffer;
         if ((raw < 0) || (raw>30000)) raw = 0;
         int32_t mv = raw;
         adc_raw_to_millivolts(adc_ref_internal(adc_dev), ADC_GAIN, ADC_RESOLUTION, &mv);
+        // Should HIGHER THAN 15ms - This delay is very important
+		k_sleep(K_MSEC(20));
         avg_mv += mv;
     }
     avg_mv = avg_mv/5;
