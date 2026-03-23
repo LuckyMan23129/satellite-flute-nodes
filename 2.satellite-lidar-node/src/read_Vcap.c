@@ -45,7 +45,7 @@
 LOG_MODULE_REGISTER(read_Vcap);
 
 // ADC configuration (implementation details)
-#define ADC_RESOLUTION         12
+#define ADC_RESOLUTION         14
 #define ADC_GAIN               ADC_GAIN_1_6
 #define ADC_REFERENCE          ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME   ADC_ACQ_TIME_DEFAULT
@@ -75,7 +75,7 @@ int8_t Vcap_init(void) {
  * @brief Read supercapacitor voltage
  *
  * Performs 5 consecutive ADC readings and returns the average voltage
- * in millivolts. Uses 12-bit resolution with internal reference.
+ * in millivolts. Uses 14-bit resolution with internal reference.
  *
  * The function:
  * 1. Configures the ADC channel with appropriate gain and reference
@@ -84,7 +84,7 @@ int8_t Vcap_init(void) {
  * 4. Converts raw values to millivolts
  * 5. Returns the average of valid readings
  *
- * @return Capacitor voltage in millivolts, or -1 on error
+ * @return Capacitor voltage in millivolts, or 1 on error
  */
 uint16_t read_Vcap_mv(void)
 {   
@@ -103,7 +103,7 @@ uint16_t read_Vcap_mv(void)
 
     if (adc_channel_setup(adc_dev, &channel_cfg)) {
         LOG_ERR("ADC channel setup failed");
-        return -1;
+        return 1;
     }
 
     const struct adc_sequence sequence = {

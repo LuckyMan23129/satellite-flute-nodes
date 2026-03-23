@@ -59,7 +59,7 @@ LOG_MODULE_REGISTER(read_solar);
 // ADC configuration (implementation details)
 #define ADC_NUM_CHANNELS        1
 #define ADC_NODE                DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
-#define ADC_RESOLUTION          12
+#define ADC_RESOLUTION          14
 #define ADC_GAIN                ADC_GAIN_1_6
 #define ADC_REFERENCE           ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME    ADC_ACQ_TIME_DEFAULT
