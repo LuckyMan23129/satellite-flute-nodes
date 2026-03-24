@@ -84,7 +84,7 @@ int8_t Vcap_init(void) {
  * 4. Converts raw values to millivolts
  * 5. Returns the average of valid readings
  *
- * @return Capacitor voltage in millivolts, or 1 on error
+ * @return Capacitor voltage in millivolts, or 30000 on error
  */
 uint16_t read_Vcap_mv(void)
 {   
@@ -103,7 +103,7 @@ uint16_t read_Vcap_mv(void)
 
     if (adc_channel_setup(adc_dev, &channel_cfg)) {
         LOG_ERR("ADC channel setup failed");
-        return 1;
+        return 30000;
     }
 
     const struct adc_sequence sequence = {
@@ -123,7 +123,7 @@ uint16_t read_Vcap_mv(void)
         k_sleep(K_MSEC(20));
         if (err != 0) {
             LOG_ERR("ADC reading failed with error %d", err);
-            return 1;
+            return 30000;
         }
 
         int16_t raw = sample_buffer;

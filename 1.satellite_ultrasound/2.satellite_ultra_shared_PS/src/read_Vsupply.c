@@ -246,9 +246,9 @@ int16_t battery_sample(void)
 			if (dcp->output_ohm != 0) {
 				rc = val * (uint64_t)dcp->full_ohm
 					/ dcp->output_ohm;
-				// if (ENABLE_PRINT)
-				// 	LOG_INF("raw %u ~ %u mV => %d mV",
-				// 	ddp->raw, val, rc);
+				if (ENABLE_PRINT)
+					LOG_INF("raw %u ~ %u mV => %d mV",
+					ddp->raw, val, rc);
 			} else {
 				rc = val;
 				// if (ENABLE_PRINT)
@@ -273,28 +273,54 @@ int16_t battery_sample(void)
  * 4. Averages the readings for noise reduction
  * 5. Disables the measurement circuit to save power
  *
- * @return Supply voltage in millivolts, or 0 on initialization failure
+ * @return Supply voltage in millivolts, or 40000 on initialization failure
  */
+
 uint16_t read_Vsupp_mv(void) {
 	battery_setup();
-	uint16_t rc = battery_measure_enable(true);
-  	int32_t batt_mV = 0;
-	k_sleep(K_MSEC(10));
-	if (rc != 0) {
-		LOG_ERR("Failed initialize battery measurement: %d", rc);
-		return 0;
+	k_sleep(K_MSEC(5));
+
+	// Retry battery_measure_enable() up to 3 times to handle transient ADC init failures.
+	int16_t rc = -1;
+	for (uint8_t attempt = 0; attempt < 3; attempt++) {
+		rc = battery_measure_enable(true);
+		if (rc == 0) break;
+		LOG_ERR("battery_measure_enable failed (attempt %u): %d\n", attempt + 1, rc);
+		k_sleep(K_MSEC(50));
+		battery_setup(); // Re-init ADC before next attempt
 	}
+
+  	int32_t batt_mV = 0;
+	k_sleep(K_MSEC(15));
+	if (rc != 0) {
+		LOG_ERR("Failed initialize battery measurement after 3 attempts: %d\n", rc);
+		return 40000;
+	}
+
+
+// uint16_t read_Vsupp_mv(void) {
+// 	battery_setup();
+// 	uint16_t rc = battery_measure_enable(true);
+//   	int32_t batt_mV = 0;
+// 	// k_sleep(K_MSEC(10));
+// 	k_sleep(K_MSEC(15));
+// 	if (rc != 0) {
+// 		LOG_ERR("Failed initialize battery measurement: %d", rc);
+// 		return 40000;
+// 	}
 
 
   for (uint8_t i = 0; i < 5; i++)
   {
     batt_mV += battery_sample();
-    k_sleep(K_MSEC(20));
+    // k_sleep(K_MSEC(20));
+	k_sleep(K_MSEC(30));
   }
   batt_mV = batt_mV/5;
   
 	if (batt_mV < 0) {
 		LOG_ERR("Failed to read battery voltage: %d", batt_mV);
+		return 40000;
 	} else {
 		if (ENABLE_PRINT)
 			LOG_INF("- Battery voltage: %d mV", batt_mV);

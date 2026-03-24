@@ -59,7 +59,7 @@ LOG_MODULE_REGISTER(read_solar);
 // ADC configuration (implementation details)
 #define ADC_NUM_CHANNELS        1
 #define ADC_NODE                DT_PHANDLE(DT_PATH(zephyr_user), io_channels)
-#define ADC_RESOLUTION          12
+#define ADC_RESOLUTION          14
 #define ADC_GAIN                ADC_GAIN_1_6
 #define ADC_REFERENCE           ADC_REF_INTERNAL
 #define ADC_ACQUISITION_TIME    ADC_ACQ_TIME_DEFAULT
@@ -187,12 +187,12 @@ uint16_t read_adc(void)
  * open-circuit voltage measurement.
  *
  * Measurement sequence:
- * 1. Disable charging (isolate solar panel from capacitor via SW2)
- * 2. Enable voltage divider (SW3)
+ * 1. Disable charging (isolate solar panel from capacitor via a digital SW)
+ * 2. Enable voltage divider
  * 3. Wait 200ms for voltage stabilization
  * 4. Read ADC and multiply by 2 (voltage divider ratio)
- * 5. Disable voltage divider (SW3)
- * 6. Re-enable charging (SW2)
+ * 5. Disable voltage divider
+ * 6. Re-enable charging
  *
  * @note The 200ms delay is critical for accurate measurement as it allows
  *       the solar panel voltage to stabilize after isolation.
@@ -201,7 +201,6 @@ uint16_t read_adc(void)
  */
 uint16_t update_Vpv(void)
 {
-    disable_charging();       					// Isolate the solar panels from Capacitors to measure open-circuit Vpv
     enable_Vpv_divider();
 	
 	// Should HIGHER THAN 200ms - This delay is very important

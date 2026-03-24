@@ -117,7 +117,7 @@ void astar_init(const astar_config_t *cfg)
     state.oldV = 0;
     state.deltaV = 0;
     state.sleepTimer = 0;
-    state.optimumV = 0;
+    state.optimumV = cfg->daytimeOptimumV;
     state.nighttimeFlag = false;
     state.timeSinceSunset = 0;
     state.timeSinceSunrise = 0;
@@ -280,9 +280,6 @@ uint32_t schedule(void)
 {
     uint32_t sleepDelta;
 
-    // Update solar panel voltage (solarV is not accessed by overV thread - no semaphore needed)
-    state.solarV = update_Vpv();
-
     // Hold state lock for entire scheduling computation to prevent races with overV thread
     k_sem_take(&vcap_semaphore, K_FOREVER);
 
@@ -294,17 +291,19 @@ uint32_t schedule(void)
         state.newV = read_Vcap_mv();
     else
         state.newV = read_Vsupp_mv();
+    if (ENABLE_PRINT)
+        LOG_INF("The supercapacitor Voltage - Vcap = %d mV", state.newV);
 
-    // Reconnect solar only when Vcap is below the maximum threshold.
-    // This prevents the large inrush that occurs when Vsolar >> Vcap and that
-    // was causing the modem to lose its LTE connection.
-    if (state.newV > config.maxVoltage)
+    
+    // Update solar panel voltage
+    disable_charging();  // Isolate the solar panels from Capacitors to measure open-circuit Vpv
+    state.solarV = update_Vpv();
+    // Reconnect solar only when Vcap is below the opencircuit threshold because we disable it before reading Vpv
+    if (state.newV > config.OpenCircuitVoltage)
         disable_charging();
     else
         enable_charging();
 
-    if (ENABLE_PRINT)
-        LOG_INF("The supercapacitor Voltage - Vcap = %d mV", state.newV);
 
     // Calculate voltage change since last cycle
     state.deltaV = state.newV - state.oldV;
@@ -336,6 +335,7 @@ uint32_t schedule(void)
         }
     }
 
+    
     // Check for sunset (transition from day to night)
     if (state.solarV < config.sleep_Vpv_Threshold)
     {
@@ -356,6 +356,8 @@ uint32_t schedule(void)
             state.nighttimeFlag = true;
         }
     }
+
+
 
     // --- Calculate Target Voltage (optimumV) ---
 
