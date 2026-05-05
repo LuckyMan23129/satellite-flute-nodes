@@ -75,7 +75,7 @@ int8_t Vcap_init(void) {
  * @brief Read supercapacitor voltage
  *
  * Performs 5 consecutive ADC readings and returns the average voltage
- * in millivolts. Uses 14-bit resolution with internal reference.
+ * in millivolts. Uses 12-bit resolution with internal reference.
  *
  * The function:
  * 1. Configures the ADC channel with appropriate gain and reference

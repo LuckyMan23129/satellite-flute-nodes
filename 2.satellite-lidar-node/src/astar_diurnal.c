@@ -154,6 +154,17 @@ void astar_safe_update_vcap(uint16_t vcap_mv)
 }
 
 /**
+ * @brief Read capacitor voltage from ADC
+ * 
+ * @return Capacitor voltage in millivolts
+ */
+uint16_t astar_safe_read_vcap(void)
+{
+    if (!initialized) return 0;
+    return config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+}
+
+/**
  * @brief Check if the system should suspend due to low voltage
  *
  * Compares the current capacitor voltage against the configured
@@ -215,8 +226,7 @@ void overV_protection_thread(void)
 
             if (k_sem_take(&vcap_semaphore, K_SECONDS(5)) == 0)
             {
-                state.newV = v;
-                if (state.newV > config.OpenCircuitVoltage)
+                if (v > config.OpenCircuitVoltage)
                     disable_charging();
                 else
                     enable_charging();
@@ -252,9 +262,12 @@ void setSuspensionHandler(void)
         LOG_INF("Vcap is very low, so the MCU enters sleep mode immediately for %d (s)",
                 config.LowVolt_SleepTime);
 
+    k_sem_take(&vcap_semaphore, K_FOREVER);
     state.sleepTimer = config.LowVolt_SleepTime;
     state.oldV = state.newV;
-    k_sleep(K_SECONDS(state.sleepTimer));
+    k_sem_give(&vcap_semaphore);
+
+    k_sleep(K_SECONDS(config.LowVolt_SleepTime));
 }
 
 /**
@@ -283,14 +296,15 @@ uint32_t schedule(void)
     // Hold state lock for entire scheduling computation to prevent races with overV thread
     k_sem_take(&vcap_semaphore, K_FOREVER);
 
-    // Read FRESH Vcap first -- update_Vpv() left charging disabled to avoid
-    // an inrush current spike (Vsolar >> Vcap when Vsolar > 6000 mV).
-    // We must know the actual current Vcap before deciding whether it is safe
-    // to reconnect the solar panel.
-    if (config.USE_BOOST)
-        state.newV = read_Vcap_mv();
-    else
-        state.newV = read_Vsupp_mv();
+    /** state.newV is already set by astar_safe_update_vcap() in main.c before
+     *  schedule() is called. Re-reading here is unnecessary and waste energy
+     *  So, we comment this
+    */
+    // if (config.USE_BOOST)
+    //     state.newV = read_Vcap_mv();
+    // else
+    //     state.newV = read_Vsupp_mv();
+
     if (ENABLE_PRINT)
         LOG_INF("The supercapacitor Voltage - Vcap = %d mV", state.newV);
 

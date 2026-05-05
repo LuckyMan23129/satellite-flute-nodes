@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <zephyr/kernel.h>
 
 // ---------------------------------------------------------------------------#
 // Configuration Structure                                                    #
@@ -58,6 +59,7 @@ void astar_init(const astar_config_t *config);
  * @brief Update the current capacitor voltage reading
  * @param vcap_mv Capacitor voltage in millivolts
  */
+uint16_t astar_safe_read_vcap(void);
 void astar_safe_update_vcap(uint16_t vcap_mv);
 
 /**

@@ -93,6 +93,17 @@ static const astar_config_t astar_params = {
 K_THREAD_DEFINE(over_v_id, OVER_V_STACK_SIZE, overV_protection_thread,
                 NULL, NULL, NULL, OVER_V_PRIORITY, 0, 0);
 
+// ---------------------------------------------------------------------------#
+// Power-Rail Protection                                                      #
+// ---------------------------------------------------------------------------#
+/**
+ * @brief Mutex that serialises modem transmission against solar-panel
+ *        reconnection.  Hold it while calling modem_transmitData(); the
+ *        overV protection thread acquires it before enable_charging() and
+ *        releases it only after the rail has stabilised.
+ */
+K_MUTEX_DEFINE(modem_rail_mutex_0);
+
 /* -------------------------------------------------------------------------
  * Main entry point
  * ---------------------------------------------------------------------- */
@@ -168,8 +179,10 @@ int main(void)
         // 1. Voltage check — deep sleep immediately if Vcap is too low
         //====================================================================
     rerun_astar_after_suspension:
-        newV = astar_get_use_boost() ? read_Vcap_mv() : read_Vsupp_mv();
-        astar_safe_update_vcap(newV);
+        // Read current Vcap
+        newV = astar_safe_read_vcap();
+        // Update internal state
+        astar_safe_update_vcap(newV);    
 
         if (astar_should_suspend()) {
             lowpower_setup_uart0_DIS();     // avoid wasting power during long suspension sleep
@@ -213,10 +226,6 @@ int main(void)
         
         
 
-
-
-
-
         //====================================================================
         // 4. AsTAR++ scheduler
         //====================================================================
@@ -235,10 +244,22 @@ int main(void)
         //====================================================================
         // 6. Prepare data frame and transmit it to server
         //====================================================================
+        k_mutex_lock(&modem_rail_mutex_0, K_FOREVER);
         satellite->send_binary(frame, FRAME_SIZE);
-        
+        k_mutex_unlock(&modem_rail_mutex_0);
+
         //====================================================================
-        // 7. Power down peripherals and suspend UART before sleep
+        // 7. Control charging based on Vpv and open-circuit voltage
+        //====================================================================
+        // Reconnect solar only when Vcap is below the opencircuit threshold because we disable it before reading Vpv
+        // ONLY DO THIS AFTER sending data to avoid the inrush current issue when reconnecting solar panel at high Vpv
+        if (newV > astar_get_open_circuit_voltage())
+            disable_charging();
+        else
+            enable_charging();
+
+        //====================================================================
+        // 8. Power down peripherals and suspend UART before sleep
         //====================================================================
             /**
              * @note: We should NOT turn off UART0 and UART3 somewhere 
@@ -254,7 +275,7 @@ int main(void)
         periph_sw_turn_off();
         
         //====================================================================
-        // 8. Deep sleep
+        // 9. Deep sleep
         //====================================================================
         if (ENABLE_PRINT)
             LOG_INF("Sleeping for %d s", sleep_duration);
