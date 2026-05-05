@@ -203,9 +203,9 @@ int main(void)
         //====================================================================
         // 5. Prepare data frame and transmit it to server
         //====================================================================
-        k_mutex_lock(&modem_rail_mutex_0, K_FOREVER); 
+        // k_mutex_lock(&modem_rail_mutex_0, K_FOREVER); 
         satellite->send_binary(frame, FRAME_SIZE);
-        k_mutex_unlock(&modem_rail_mutex_0);
+        // k_mutex_unlock(&modem_rail_mutex_0);
         
         //====================================================================
         // 6. Power down peripherals and suspend UART before sleep
