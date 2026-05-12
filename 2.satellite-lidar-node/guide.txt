@@ -1,13 +1,14 @@
 This code is used to read LiDAR sensor and send related data to the server
 
 ==================================================================================================
-2.satellite_lidar_node:	This code is used to read "LiDAR sensor" + "Low power" + "AsTAR++", then send them via satellite
+2.lid_sat:	This code is used to read "LiDAR sensor" + "Low power" + "AsTAR++", then send them via satellite
  
-* Achievement: build successful
+* Achievement:
 
-* Limitations: Should update "main.c + satellite lib + control separate sensor power supply" like the ultra node so that we can use this code
+   
 
-* Notes: Remember to turn off UART0 in main.c to prevent log/print for saving energy
+* Limitations
+	+ 
 
 ==================================================================================================
 1.lid_sat:	This code is used to read LiDAR sensor and send it + dummy AsTAR parameters via satellite

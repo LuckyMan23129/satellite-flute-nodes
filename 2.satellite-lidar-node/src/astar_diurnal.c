@@ -85,8 +85,32 @@ typedef struct {
 
 static astar_config_t config;
 static astar_state_t  state;
-static struct k_sem   vcap_semaphore;
 static bool           initialized = false;
+
+
+// ---------------------------------------------------------------------------#
+// Power-Rail Protection                                                      #
+// ---------------------------------------------------------------------------#
+/* Protects all reads/writes of the astar_state_t struct across threads.
+ * Lock order when modem_rail_mutex is also needed:
+ *   vcap_mutex → modem_rail_mutex  (never reversed)
+ * Lock order when adc_mutex is also needed:
+ *   vcap_mutex → adc_mutex         (never reversed) */
+K_MUTEX_DEFINE(vcap_mutex);
+
+/**
+ * @brief Shared mutex that serialises modem_transmitData() (main thread) against
+ *        enable_charging() + rail-stabilisation sleep (overV thread), preventing
+ *        solar panel reconnection from disrupting an in-progress transmission.
+ *        Declared extern in astar_diurnal.h so main.c can acquire it.
+ *        Lock order when vcap_mutex is also needed:
+ *          vcap_mutex → modem_rail_mutex  (never reversed)
+ */
+K_MUTEX_DEFINE(modem_rail_mutex);
+
+/* Serialises all SAADC accesses across threads (overV thread, main, schedule). */
+K_MUTEX_DEFINE(adc_mutex);
+
 
 // Internal constants for day/night transition detection
 static const uint16_t nightVLossTimeThreshold = 300;  // Time threshold to confirm sunset (seconds)
@@ -100,9 +124,8 @@ static const uint8_t  weightingNewNightLength = 30;   // EWMA weighting for new 
 /**
  * @brief Initialize the AsTAR algorithm with provided configuration
  *
- * This function copies the provided configuration, initializes the runtime
- * state to default values, and sets up the semaphore for thread-safe
- * voltage readings.
+ * This function copies the provided configuration and initializes the runtime
+ * state to default values.
  *
  * @param cfg Pointer to the configuration structure containing all AsTAR parameters
  */
@@ -127,8 +150,6 @@ void astar_init(const astar_config_t *cfg)
     state.daily_first_wakeup_flag = false;
     state.daily_first_sleep_flag = false;
 
-    // Initialize semaphore for thread-safe ADC access
-    k_sem_init(&vcap_semaphore, 1, 1);
     initialized = true;
 }
 
@@ -140,7 +161,7 @@ void astar_init(const astar_config_t *cfg)
  * @brief Update the current capacitor voltage in the internal state
  *
  * This function provides thread-safe update of the capacitor voltage.
- * It uses a semaphore to prevent race conditions with the overvoltage
+ * It uses vcap_mutex to prevent race conditions with the overvoltage
  * protection thread.
  *
  * @param vcap_mv Current capacitor voltage in millivolts
@@ -148,9 +169,9 @@ void astar_init(const astar_config_t *cfg)
 void astar_safe_update_vcap(uint16_t vcap_mv)
 {
     if (!initialized) return;
-    k_sem_take(&vcap_semaphore, K_FOREVER);
+    k_mutex_lock(&vcap_mutex, K_FOREVER);
     state.newV = vcap_mv;
-    k_sem_give(&vcap_semaphore);
+    k_mutex_unlock(&vcap_mutex);
 }
 
 /**
@@ -161,7 +182,10 @@ void astar_safe_update_vcap(uint16_t vcap_mv)
 uint16_t astar_safe_read_vcap(void)
 {
     if (!initialized) return 0;
-    return config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+    k_mutex_lock(&adc_mutex, K_FOREVER);
+    uint16_t v = config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+    k_mutex_unlock(&adc_mutex);
+    return v;
 }
 
 /**
@@ -177,6 +201,7 @@ bool astar_should_suspend(void)
 {
     return (state.newV <= config.shutOffVoltage);
 }
+
 
 // ---------------------------------------------------------------------------
 // Overvoltage Protection Thread
@@ -201,20 +226,20 @@ void overV_protection_thread(void)
         if (ENABLE_PRINT)
             LOG_INF("+++++ Entered OverVcap Protection Thread +++++");
 
-        /* Step 1: hold semaphore only long enough to read flags/thresholds — no ADC here. */
+        /* Step 1: hold mutex only long enough to read flags/thresholds — no ADC here. */
         bool nighttime = false;
         bool do_adc    = false;
-        if (k_sem_take(&vcap_semaphore, K_SECONDS(5)) == 0)
+        if (k_mutex_lock(&vcap_mutex, K_SECONDS(5)) == 0)
         {
             // Only check during daytime when voltage is high enough to matter
             do_adc   = (!state.nighttimeFlag) && (state.oldV > config.check_overVcap_threshold);
             nighttime = state.nighttimeFlag;
-            k_sem_give(&vcap_semaphore);
+            k_mutex_unlock(&vcap_mutex);
         }
         else
         {
             if (ENABLE_PRINT)
-                LOG_INF("Thread timed out waiting for vcap_semaphore");
+                LOG_INF("Thread timed out waiting for vcap_mutex");
         }
 
         /* Step 2: ADC read happens outside the semaphore — takes ~100 ms but
@@ -222,15 +247,38 @@ void overV_protection_thread(void)
          * the brief state write and GPIO action. */
         if (do_adc)
         {
-            uint16_t v = config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+            k_mutex_lock(&adc_mutex, K_FOREVER);
+            uint16_t  v = config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+            k_mutex_unlock(&adc_mutex);
+            bool     did_enable    = false;
+            uint16_t solar_snapshot = 0;
 
-            if (k_sem_take(&vcap_semaphore, K_SECONDS(5)) == 0)
+            if (k_mutex_lock(&vcap_mutex, K_SECONDS(5)) == 0)
             {
-                if (v > config.OpenCircuitVoltage)
+                if (v > config.OpenCircuitVoltage) {
                     disable_charging();
-                else
+                } else {
+                    /* Acquire modem_rail_mutex INSIDE vcap_mutex so that
+                     * enable_charging() and the rail-stabilisation sleep form
+                     * an atomic unit and the main thread cannot interleave a
+                     * modem_transmitData() call between them.
+                     * Lock order: vcap_mutex → modem_rail_mutex
+                     * (never reversed). */
+                    k_mutex_lock(&modem_rail_mutex, K_FOREVER);
                     enable_charging();
-                k_sem_give(&vcap_semaphore);
+                    did_enable    = true;
+                    solar_snapshot = state.solarV;  // capture under lock to avoid data race
+                }
+                k_mutex_unlock(&vcap_mutex);
+            }
+
+            /* Rail stabilisation: sleep outside vcap_mutex but still
+             * inside modem_rail_mutex so modem TX waits until the inrush
+             * current from the reconnected solar panel has settled. */
+            if (did_enable) {
+                if ((v > config.daytimeOptimumV) && (solar_snapshot > (v + 800U)))
+                    k_sleep(K_MSEC(100));
+                k_mutex_unlock(&modem_rail_mutex);
             }
         }
 
@@ -262,10 +310,10 @@ void setSuspensionHandler(void)
         LOG_INF("Vcap is very low, so the MCU enters sleep mode immediately for %d (s)",
                 config.LowVolt_SleepTime);
 
-    k_sem_take(&vcap_semaphore, K_FOREVER);
+    k_mutex_lock(&vcap_mutex, K_FOREVER);
     state.sleepTimer = config.LowVolt_SleepTime;
     state.oldV = state.newV;
-    k_sem_give(&vcap_semaphore);
+    k_mutex_unlock(&vcap_mutex);
 
     k_sleep(K_SECONDS(config.LowVolt_SleepTime));
 }
@@ -294,7 +342,7 @@ uint32_t schedule(void)
     uint32_t sleepDelta;
 
     // Hold state lock for entire scheduling computation to prevent races with overV thread
-    k_sem_take(&vcap_semaphore, K_FOREVER);
+    k_mutex_lock(&vcap_mutex, K_FOREVER);
 
     /** state.newV is already set by astar_safe_update_vcap() in main.c before
      *  schedule() is called. Re-reading here is unnecessary and waste energy
@@ -311,12 +359,16 @@ uint32_t schedule(void)
     
     // Update solar panel voltage
     disable_charging();  // Isolate the solar panels from Capacitors to measure open-circuit Vpv
+    k_mutex_lock(&adc_mutex, K_FOREVER);
     state.solarV = update_Vpv();
+    k_mutex_unlock(&adc_mutex);
+    
+    // DO this after sending data to avoid the inrush current issue when reconnecting solar panel at high Vpv 
     // Reconnect solar only when Vcap is below the opencircuit threshold because we disable it before reading Vpv
-    if (state.newV > config.OpenCircuitVoltage)
-        disable_charging();
-    else
-        enable_charging();
+    // if (state.newV > config.OpenCircuitVoltage)
+    //     disable_charging();
+    // else
+    //     enable_charging();
 
 
     // Calculate voltage change since last cycle
@@ -469,7 +521,7 @@ uint32_t schedule(void)
     // Save current voltage for next cycle's delta calculation
     state.oldV = state.newV;
 
-    k_sem_give(&vcap_semaphore);  // release after all state reads/writes are complete
+    k_mutex_unlock(&vcap_mutex);  // release after all state reads/writes are complete
 
     if (ENABLE_PRINT)
         LOG_INF("Finished run the AsTAR scheduler - Sleeptimer = %d (s) ", state.sleepTimer);

@@ -21,8 +21,9 @@
 
 LOG_MODULE_REGISTER(iridium_uart, LOG_LEVEL_DBG);
 
-/* Forward declaration — defined later in this file. */
+/* Forward declarations — defined later in this file. */
 static const char *iridium_result_str(iridium_result_t result);
+iridium_result_t iridium_send_cmd_verify_response(const char *cmd, const char *expected_resp, int timeout_s);
 
 /* -------------------------------------------------------------------------
  * Hardware binding
@@ -88,6 +89,12 @@ static const char *volatile expected_response;
  */
 static struct k_sem tx_done_sem;
 
+/*
+ * Set to true during iridium_uart_deinit() to suppress the UART_RX_DISABLED
+ * handler from automatically re-enabling RX (which would fight the teardown).
+ */
+static volatile bool rx_shutting_down;
+
 /* -------------------------------------------------------------------------
  * UART async callback
  * ---------------------------------------------------------------------- */
@@ -114,10 +121,11 @@ static void uart_cb(const struct device *dev,
             resp_len += len;
             resp_buf[resp_len] = '\0';
         } else if (len > 0U) {
-            LOG_WRN("Response buffer full — %zu bytes dropped", len);
+            LOG_WRN("Response buffer full — %u bytes dropped", (unsigned int)len);
         }
 
-        LOG_DBG("RX [%zu bytes]: %.*s", len, (int)len, (const char *)src);
+        if (ENABLE_PRINT)
+            LOG_DBG("RX [%u bytes]: %.*s", (unsigned int)len, (int)len, (const char *)src);
 
         /* ---------------------------------------------------------------
          * EVENT-DRIVEN RESPONSE DETECTION
@@ -129,7 +137,8 @@ static void uart_cb(const struct device *dev,
         if (expected_response != NULL) {
             /* Check for expected success response */
             if (strstr(resp_buf, expected_response) != NULL) {
-                LOG_DBG("Response matched: '%s'", expected_response);
+                if (ENABLE_PRINT)
+                    LOG_DBG("Response matched: '%s'", expected_response);
                 response_result = IRIDIUM_OK;
                 k_sem_give(&response_sem);   /* Wake waiting thread! */
                 expected_response = NULL;     /* One-shot detection */
@@ -160,8 +169,9 @@ static void uart_cb(const struct device *dev,
         /*
          * The driver ran out of buffer space (or was explicitly stopped).
          * Re-enable on the inactive buffer; do NOT touch the active one.
+         * Skip re-enable if we are intentionally shutting down (deinit path).
          */
-        {
+        if (!rx_shutting_down) {
             uint8_t next = active_rx_buf ^ 1U;
             memset(rx_buf[next], 0, RX_BUF_SIZE);
             active_rx_buf = next;
@@ -198,7 +208,11 @@ int iridium_uart_init(void)
         return -ENODEV;
     }
 
-    LOG_DBG("UART2 device: %p", uart_dev);
+    if (ENABLE_PRINT)
+        LOG_DBG("UART2 device: %p", uart_dev);
+
+    /* Allow UART_RX_DISABLED callback to re-enable RX during normal operation */
+    rx_shutting_down = false;
 
     /* Initialize semaphores for event-driven TX and RX detection */
     k_sem_init(&response_sem, 0, 1);
@@ -218,12 +232,32 @@ int iridium_uart_init(void)
         return ret;
     }
 
-    LOG_INF("Iridium UART initialised (semaphore mode) — waiting 10 s for module boot");
-    k_sleep(K_SECONDS(10));
+    if (ENABLE_PRINT)
+        LOG_INF("Iridium UART initialised (semaphore mode) — waiting for modem ready...");
+
+    int attempts = 0;
+    while (iridium_send_cmd_verify_response("AT\r", "OK", 2) != IRIDIUM_OK) {
+        if (++attempts >= 5) {
+            LOG_ERR("Modem not responding after %d attempts", attempts);
+            return -ETIMEDOUT;
+        }
+        LOG_WRN("No response, retrying (%d/5)...", attempts);
+    }
+    if (ENABLE_PRINT)
+        LOG_INF("Modem ready");
 
     return 0;
 }
 
+
+/* Stops the async RX cleanly so that the next iridium_uart_init() call can
+ * succeed. Must be called before lowpower_setup_uart2_DIS() every cycle. */
+void iridium_uart_deinit(void)
+{
+    rx_shutting_down = true;        /* tell callback: do NOT re-enable RX    */
+    uart_rx_disable(uart_dev);      /* request driver to stop RX             */
+    k_sleep(K_MSEC(20));            /* wait for UART_RX_DISABLED callback    */
+}
 
 /* Clears the response accumulator under IRQ lock so stale data from a
  * previous command cannot trigger the next response check. */
@@ -302,10 +336,12 @@ iridium_result_t iridium_send_cmd_verify_response(const char *cmd,
     /* Brief settling delay to let any in-flight bytes drain */
     k_sleep(K_MSEC(100));
 
-    LOG_INF("CMD: %.*s", (int)(cmd_len > 0U ? cmd_len - 1U : 0U), cmd);
+    if (ENABLE_PRINT)
+        LOG_INF("CMD: %.*s", (int)(cmd_len > 0U ? cmd_len - 1U : 0U), cmd);
 
     /* Transmit the command */
-    LOG_DBG("TX cmd [%zu bytes]: %.*s", cmd_len, (int)(cmd_len - 1U), cmd);
+    if (ENABLE_PRINT)
+        LOG_DBG("TX cmd [%u bytes]: %.*s", (unsigned int)cmd_len, (int)(cmd_len - 1U), cmd);
     int ret = uart_tx_and_wait_txdone((const uint8_t *)cmd, cmd_len);
     if (ret != 0) {
         LOG_ERR("Transmit failed: %d", ret);
@@ -320,7 +356,8 @@ iridium_result_t iridium_send_cmd_verify_response(const char *cmd,
      * or timeout expires. Thread sleeps here with ZERO polling overhead.
      * ----------------------------------------------------------------------- */
 
-    LOG_DBG("Waiting for response (blocking on semaphore, timeout %d s)...", timeout_s);
+    if (ENABLE_PRINT)
+        LOG_DBG("Waiting for response (blocking on semaphore, timeout %d s)...", timeout_s);
     
     ret = k_sem_take(&response_sem, K_SECONDS(timeout_s));
 
@@ -328,7 +365,8 @@ iridium_result_t iridium_send_cmd_verify_response(const char *cmd,
 
     if (ret == 0) {
         /* Semaphore was signaled — callback detected response */
-        LOG_INF("Response received: %s", iridium_result_str(response_result));
+        if (ENABLE_PRINT)
+            LOG_INF("Response received: %s", iridium_result_str(response_result));
         return response_result;
     } else {
         /* Timeout expired */
@@ -347,8 +385,8 @@ iridium_result_t iridium_sbd_write_binary(const uint8_t *data,
     /* --- Argument validation --- */
     if (data == NULL || len == 0U || len > IRIDIUM_SBD_MAX_BINARY_LEN) {
         LOG_ERR("iridium_sbd_write_binary(): invalid argument "
-                "(data=%p, len=%zu, max=%u)",
-                data, len, IRIDIUM_SBD_MAX_BINARY_LEN);
+                "(data=%p, len=%u, max=%u)",
+                data, (unsigned int)len, IRIDIUM_SBD_MAX_BINARY_LEN);
         return IRIDIUM_BAD_ARG;
     }
 
@@ -363,14 +401,15 @@ iridium_result_t iridium_sbd_write_binary(const uint8_t *data,
 
     char length_cmd[32];
     int  written = snprintf(length_cmd, sizeof(length_cmd),
-                            "AT+SBDWB=%zu\r", len);
+                            "AT+SBDWB=%u\r", (unsigned int)len);
 
     if (written < 0 || (size_t)written >= sizeof(length_cmd)) {
         LOG_ERR("Failed to format AT+SBDWB command");
         return IRIDIUM_TX_FAIL;
     }
 
-    LOG_INF("CMD: AT+SBDWB=%zu (%zu data bytes + 2-byte checksum)", len, len);
+    if (ENABLE_PRINT)
+        LOG_INF("CMD: AT+SBDWB=%u (%u data bytes + 2-byte checksum)", (unsigned int)len, (unsigned int)len);
 
     iridium_result_t phase1 = iridium_send_cmd_verify_response(length_cmd, "READY", timeout_s);
     if (phase1 != IRIDIUM_OK) {
@@ -390,7 +429,8 @@ iridium_result_t iridium_sbd_write_binary(const uint8_t *data,
 
     size_t total_len = len + sizeof(cs_be);
 
-    LOG_DBG("Sending %zu bytes of data + 2-byte checksum (0x%04X)", len, cs);
+    if (ENABLE_PRINT)
+        LOG_DBG("Sending %u bytes of data + 2-byte checksum (0x%04X)", (unsigned int)len, cs);
 
     resp_buf_reset();
     k_sem_reset(&response_sem);
@@ -408,7 +448,8 @@ iridium_result_t iridium_sbd_write_binary(const uint8_t *data,
     /* Phase 3 — Wait for result code and interpret it                     */
     /* ------------------------------------------------------------------ */
 
-    LOG_DBG("Waiting for binary write result (semaphore)...");
+    if (ENABLE_PRINT)
+        LOG_DBG("Waiting for binary write result (semaphore)...");
     ret = k_sem_take(&response_sem, K_SECONDS(timeout_s));
     expected_response = NULL;
 
@@ -428,7 +469,8 @@ iridium_result_t iridium_sbd_write_binary(const uint8_t *data,
 
     /* Parse the digit before "OK" */
     if (strstr(resp_buf, "0") != NULL) {
-        LOG_INF("Binary payload accepted by modem (%zu bytes)", len);
+        if (ENABLE_PRINT)
+            LOG_INF("Binary payload accepted by modem (%u bytes)", (unsigned int)len);
         return IRIDIUM_OK;
     }
 
@@ -454,13 +496,15 @@ iridium_result_t iridium_sbd_initiate_session(int timeout_s)
 {
     static const char cmd[] = "AT+SBDIX\r";
 
-    LOG_INF("CMD: AT+SBDIX (timeout %d s)", timeout_s);
+    if (ENABLE_PRINT)
+        LOG_INF("CMD: AT+SBDIX (timeout %d s)", timeout_s);
     LOG_WRN("Satellite acquisition may take up to %d s", timeout_s);
 
     iridium_result_t result = iridium_send_cmd_verify_response(cmd, "OK", timeout_s);
 
     if (result != IRIDIUM_OK) {
-        LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
+        if (ENABLE_PRINT)
+            LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
         return result;
     }
 
@@ -473,20 +517,24 @@ iridium_result_t iridium_sbd_initiate_session(int timeout_s)
     char *sbdix_line = strstr(local_buf, "+SBDIX:");
     if (sbdix_line == NULL) {
         LOG_WRN("No +SBDIX: line in response — cannot verify delivery");
-        LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
+        if (ENABLE_PRINT)
+            LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
         return result;
     }
 
     int mo_status = -1;
     if (sscanf(sbdix_line, "+SBDIX: %d,", &mo_status) != 1) {
         LOG_WRN("Failed to parse +SBDIX MO status field");
-        LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
+        if (ENABLE_PRINT)
+            LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
         return result;
     }
 
     if (mo_status == 0) {
-        LOG_INF("+SBDIX MO status 0: message transferred successfully");
-        LOG_INF("AT+SBDIX completed: OK");
+        if (ENABLE_PRINT) {
+            LOG_INF("+SBDIX MO status 0: message transferred successfully");
+            LOG_INF("AT+SBDIX completed: OK");
+        }
         return IRIDIUM_OK;
     }
 
@@ -512,7 +560,8 @@ iridium_result_t iridium_sbd_initiate_session(int timeout_s)
     LOG_ERR("+SBDIX MO status %d: %s — message NOT delivered", mo_status, mo_str);
 
     result = (mo_status == 32) ? IRIDIUM_NO_NETWORK : IRIDIUM_ERROR;
-    LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
+    if (ENABLE_PRINT)
+        LOG_INF("AT+SBDIX completed: %s", iridium_result_str(result));
     return result;
 }
 
@@ -526,8 +575,10 @@ iridium_result_t iridium_sbd_initiate_session(int timeout_s)
 static iridium_result_t transmit_data_frame(const uint8_t *frame,
                                              size_t         len)
 {
-    LOG_INF("=== Starting test transmission ===");
-    LOG_INF("Writing %zu bytes to SBD TX buffer (AT+SBDWB)...", len);
+    if (ENABLE_PRINT) {
+        LOG_INF("=== Starting transmission ===");
+        LOG_INF("Writing %u bytes to SBD TX buffer (AT+SBDWB)...", (unsigned int)len);
+    }
 
     iridium_result_t result = iridium_sbd_write_binary(frame, len,
                                                         TIMEOUT_SBDWB_S);
@@ -536,18 +587,22 @@ static iridium_result_t transmit_data_frame(const uint8_t *frame,
         return result;
     }
 
-    LOG_INF("Data successfully written to modem");
-    LOG_INF("Initiating satellite exchange (AT+SBDIX)...");
+    if (ENABLE_PRINT) {
+        LOG_INF("Data successfully written to modem");
+        LOG_INF("Initiating satellite exchange (AT+SBDIX)...");
+    }
     LOG_WRN("Satellite acquisition may take up to %d s", TIMEOUT_SBDIX_S);
 
     result = iridium_sbd_initiate_session(TIMEOUT_SBDIX_S);
 
     if (result == IRIDIUM_OK) {
-        LOG_INF("Satellite transmission successful!");
+        if (ENABLE_PRINT)
+            LOG_INF("Satellite transmission successful!");
     } else {
         LOG_ERR("Satellite transmission failed (%s)",
                 iridium_result_str(result));
-        LOG_INF("Hint: a clear sky view is required for satellite contact");
+        if (ENABLE_PRINT)
+            LOG_INF("Hint: a clear sky view is required for satellite contact");
     }
 
     return result;
@@ -556,7 +611,8 @@ static iridium_result_t transmit_data_frame(const uint8_t *frame,
 /* Sends AT ping and disables flow control; shared by all transmission functions. */
 static iridium_result_t modem_prepare(void)
 {
-    LOG_INF("Testing basic modem communication (AT)...");
+    if (ENABLE_PRINT)
+        LOG_INF("Testing basic modem communication (AT)...");
 
     iridium_result_t result = iridium_send_cmd_verify_response("AT\r", "OK", TIMEOUT_AT_S);
     if (result != IRIDIUM_OK) {
@@ -565,14 +621,16 @@ static iridium_result_t modem_prepare(void)
         return result;
     }
 
-    LOG_INF("Disabling flow control (AT&K0)...");
+    if (ENABLE_PRINT)
+        LOG_INF("Disabling flow control (AT&K0)...");
     result = iridium_send_cmd_verify_response("AT&K0\r", "OK", TIMEOUT_AT_S);
     if (result != IRIDIUM_OK) {
         LOG_ERR("Failed to disable flow control (%s)", iridium_result_str(result));
         return result;
     }
 
-    LOG_INF("Modem is responding correctly");
+    if (ENABLE_PRINT)
+        LOG_INF("Modem is responding correctly");
     return IRIDIUM_OK;
 }
 
@@ -580,9 +638,11 @@ static iridium_result_t modem_prepare(void)
  * to the satellite via transmit_data_frame(). */
 void iridium_send_binary_frame(const uint8_t *frame, size_t len)
 {
-    LOG_INF("========================================");
-    LOG_INF("  Iridium Data Transmission Cycle");
-    LOG_INF("========================================");
+    if (ENABLE_PRINT) {
+        LOG_INF("========================================");
+        LOG_INF("  Iridium Data Transmission Cycle");
+        LOG_INF("========================================");
+    }
 
     iridium_result_t result = modem_prepare();
     if (result != IRIDIUM_OK) {
@@ -592,9 +652,10 @@ void iridium_send_binary_frame(const uint8_t *frame, size_t len)
     result = transmit_data_frame(frame, len);
 
     if (result == IRIDIUM_OK) {
-        LOG_INF("Test cycle completed successfully");
+        if (ENABLE_PRINT)
+            LOG_INF("Completed  transmission successfully");
     } else {
-        LOG_ERR("Test cycle failed with result: %s",
+        LOG_ERR("Failed transmission with result: %s",
                 iridium_result_str(result));
     }
 }
@@ -625,7 +686,8 @@ int iridium_get_signal_quality(void)
 {
     static const char cmd[] = "AT+CSQ\r";
 
-    LOG_INF("Reading signal quality (AT+CSQ)...");
+    if (ENABLE_PRINT)
+        LOG_INF("Reading signal quality (AT+CSQ)...");
 
     iridium_result_t result = iridium_send_cmd_verify_response(cmd, "OK", 10);
     if (result != IRIDIUM_OK) {
@@ -651,15 +713,17 @@ int iridium_get_signal_quality(void)
     int ber = 99;
 
     if (sscanf(csq_line, "+CSQ:%d,%d", &rssi, &ber) >= 1) {
-        LOG_INF("Signal quality: RSSI=%d, BER=%d", rssi, ber);
+        if (ENABLE_PRINT)
+            LOG_INF("Signal quality: RSSI=%d, BER=%d", rssi, ber);
 
         /* Validate and log signal strength */
         if (rssi >= 0 && rssi <= 31) {
-            LOG_INF("  Signal strength: %s",
-                    rssi == 0 ? "Very weak (-113 dBm or less)" :
-                    rssi < 10 ? "Weak" :
-                    rssi < 20 ? "Moderate" :
-                    rssi < 31 ? "Good" : "Excellent (-51 dBm or greater)");
+            if (ENABLE_PRINT)
+                LOG_INF("  Signal strength: %s",
+                        rssi == 0 ? "Very weak (-113 dBm or less)" :
+                        rssi < 10 ? "Weak" :
+                        rssi < 20 ? "Moderate" :
+                        rssi < 31 ? "Good" : "Excellent (-51 dBm or greater)");
             return rssi;
         } else if (rssi == 99) {
             LOG_WRN("  Signal not detectable");
@@ -687,7 +751,8 @@ int iridium_get_imei(char *buf, size_t buf_len)
         return -EINVAL;
     }
 
-    LOG_INF("Reading IMEI (AT+CGSN)...");
+    if (ENABLE_PRINT)
+        LOG_INF("Reading IMEI (AT+CGSN)...");
 
     iridium_result_t result = iridium_send_cmd_verify_response(cmd, "OK", 10);
     if (result != IRIDIUM_OK) {
@@ -725,7 +790,8 @@ int iridium_get_imei(char *buf, size_t buf_len)
         return -EBADMSG;
     }
 
-    LOG_INF("IMEI: %s", buf);
+    if (ENABLE_PRINT)
+        LOG_INF("IMEI: %s", buf);
 
     return 0;
 }
@@ -754,7 +820,8 @@ iridium_result_t iridium_send_text(const char *msg, int timeout_s)
         return IRIDIUM_BAD_ARG;
     }
 
-    LOG_INF("Writing text to SBD TX buffer: \"%s\"", msg);
+    if (ENABLE_PRINT)
+        LOG_INF("Writing text to SBD TX buffer: \"%s\"", msg);
 
     result = iridium_send_cmd_verify_response(cmd, "OK", timeout_s);
     if (result != IRIDIUM_OK) {
@@ -762,13 +829,15 @@ iridium_result_t iridium_send_text(const char *msg, int timeout_s)
         return result;
     }
 
-    LOG_INF("Initiating satellite exchange (AT+SBDIX)...");
+    if (ENABLE_PRINT)
+        LOG_INF("Initiating satellite exchange (AT+SBDIX)...");
     LOG_WRN("Satellite acquisition may take up to %d s", TIMEOUT_SBDIX_S);
 
     result = iridium_sbd_initiate_session(TIMEOUT_SBDIX_S);
 
     if (result == IRIDIUM_OK) {
-        LOG_INF("Text message sent successfully");
+        if (ENABLE_PRINT)
+            LOG_INF("Text message sent successfully");
     } else {
         LOG_ERR("Text message send failed (%s)", iridium_result_str(result));
     }
@@ -784,6 +853,7 @@ iridium_result_t iridium_send_text(const char *msg, int timeout_s)
 
 static const iridium_t satellite_instance = {
     .uart_init    = iridium_uart_init,
+    .uart_deinit  = iridium_uart_deinit,
     .send_cmd     = iridium_send_cmd_verify_response,
     .sbd_write    = iridium_sbd_write_binary,
     .sbd_initiate = iridium_sbd_initiate_session,

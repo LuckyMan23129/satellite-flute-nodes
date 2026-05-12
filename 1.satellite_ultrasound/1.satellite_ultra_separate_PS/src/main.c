@@ -93,16 +93,16 @@ static const astar_config_t astar_params = {
 K_THREAD_DEFINE(over_v_id, OVER_V_STACK_SIZE, overV_protection_thread,
                 NULL, NULL, NULL, OVER_V_PRIORITY, 0, 0);
 
-// ---------------------------------------------------------------------------#
-// Power-Rail Protection                                                      #
-// ---------------------------------------------------------------------------#
+// ---------------------------------------------------------------------------
+// Modem -Rail Protection                                                      
+// ---------------------------------------------------------------------------
 /**
- * @brief Mutex that serialises modem transmission against solar-panel
- *        reconnection.  Hold it while calling modem_transmitData(); the
- *        overV protection thread acquires it before enable_charging() and
- *        releases it only after the rail has stabilised.
+ * @brief /* modem_rail_mutex is defined in astar_diurnal.c and declared extern in
+ * astar_diurnal.h.  Hold it while calling modem_transmitData() so the overV
+ * thread cannot reconnect the solar panel, leading to unstable rail current, 
+ * during a transmission. */
  */
-K_MUTEX_DEFINE(modem_rail_mutex_0);
+// K_MUTEX_DEFINE(modem_rail_mutex);
 
 /* -------------------------------------------------------------------------
  * Main entry point
@@ -244,9 +244,9 @@ int main(void)
         //====================================================================
         // 6. Prepare data frame and transmit it to server
         //====================================================================
-        // k_mutex_lock(&modem_rail_mutex_0, K_FOREVER);
+        // k_mutex_lock(&modem_rail_mutex, K_FOREVER);
         satellite->send_binary(frame, FRAME_SIZE);
-        // k_mutex_unlock(&modem_rail_mutex_0);
+        // k_mutex_unlock(&modem_rail_mutex);
 
         //====================================================================
         // 7. Control charging based on Vpv and open-circuit voltage

@@ -104,4 +104,12 @@ uint32_t astar_get_min_rate(void);
 uint32_t astar_get_night_duration_estimate(void);
 bool astar_get_use_boost(void);
 
+// ---------------------------------------------------------------------------#
+// Shared Synchronisation Primitives                                          #
+// ---------------------------------------------------------------------------#
+/* Serialises modem_transmitData() (main thread) against enable_charging() +
+ * rail-stabilisation sleep (overV thread).  Defined in astar_diurnal.c.
+ * Always acquire before calling modem_transmitData(). */
+extern struct k_mutex modem_rail_mutex;
+
 #endif  /*APPLICATION_ASTAR_DIURNAL_H*/

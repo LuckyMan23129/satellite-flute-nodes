@@ -20,6 +20,10 @@
 &uart2{
     status = "okay";
     current-speed = <19200>;  // Iridium 9603 baud rate is 19200bps
+
+    pinctrl-0 = <&uart2_default>;
+    pinctrl-1 = <&uart2_sleep>;
+    pinctrl-names = "default", "sleep";
 };
 // *************************** Iridium: uart2 - E **************************
 

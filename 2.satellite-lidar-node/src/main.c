@@ -82,7 +82,6 @@ static const astar_config_t astar_params = {
     .nightDurationRollingEstimate = 48000,
 };
 
-
 // ---------------------------------------------------------------------------
 // Overvoltage Protection Thread
 // ---------------------------------------------------------------------------
@@ -91,17 +90,16 @@ static const astar_config_t astar_params = {
 K_THREAD_DEFINE(over_v_id, OVER_V_STACK_SIZE, overV_protection_thread,
                 NULL, NULL, NULL, OVER_V_PRIORITY, 0, 0);
 
-// ---------------------------------------------------------------------------#
-// Power-Rail Protection                                                      #
-// ---------------------------------------------------------------------------#
+// ---------------------------------------------------------------------------
+// Modem -Rail Protection                                                      
+// ---------------------------------------------------------------------------
 /**
- * @brief Mutex that serialises modem transmission against solar-panel
- *        reconnection.  Hold it while calling modem_transmitData(); the
- *        overV protection thread acquires it before enable_charging() and
- *        releases it only after the rail has stabilised.
+ * @brief /* modem_rail_mutex is defined in astar_diurnal.c and declared extern in
+ * astar_diurnal.h.  Hold it while calling modem_transmitData() so the overV
+ * thread cannot reconnect the solar panel, leading to unstable rail current, 
+ * during a transmission. */
  */
-K_MUTEX_DEFINE(modem_rail_mutex_0);
-
+// K_MUTEX_DEFINE(modem_rail_mutex);
 
 /* -------------------------------------------------------------------------
  * Main entry point
@@ -121,17 +119,20 @@ int main(void)
 
     // ── GPIO checks ───────────────────────────────────────────────────────
     if (check_gpio_sw_opencircuit()) {
-        LOG_INF("Open-circuit switch GPIO not found in Devicetree");
+        if (ENABLE_PRINT)
+            LOG_INF("Open-circuit switch GPIO not found in Devicetree");
         k_sleep(K_FOREVER);
     }
 
     if (check_gpio_Vpv_divider()) {
-        LOG_INF("Vpv divider switch GPIO not found in Devicetree");
+        if (ENABLE_PRINT)
+            LOG_INF("Vpv divider switch GPIO not found in Devicetree");
         k_sleep(K_FOREVER);
     }
 
     if (check_gpio_periph_sw()) {
-        LOG_INF("Peripheral power switch GPIO not found in Devicetree");
+        if (ENABLE_PRINT)
+            LOG_INF("Peripheral power switch GPIO not found in Devicetree");
         k_sleep(K_FOREVER);
     }
 
@@ -160,61 +161,88 @@ int main(void)
             goto rerun_astar_after_suspension;
         }
 
-        //========================================================================
-        // Iridium UART setup
-        //========================================================================
+        //====================================================================
+        // 2. LiDAR sensor reading
+        //====================================================================
         periph_sw_turn_on();
-        k_sleep(K_SECONDS(20));
-        lowpower_setup_uart2_ENA();
+        
+        /** @note: 
+         *    + When Vcap > 5V, the buck-boost converter works on "buck mode" which
+         *      need longer interval of 500ms to stabilize the power rail after turning on switch.
+         *    + When Vcap < 5V, the buck-boost converter works on "boost mode" which can stabilize the power rail 
+         *      faster after turning on switch (50ms).
+         *    + If we do not use the separate 5V buck-boost (we use the built-in buck-boost of nrf9160), a delay 
+         *      of 50ms is enough for the power rail to stabilize after turning on switch even at high Vcap 
+         *      because the boost converter can quickly ramp up the voltage to 5V.
+        */
+        // if ((astar_get_vcap_mv() > 4900) && (astar_get_vpv_mv() > 4500))
+        if (astar_get_vcap_mv() > 4900)
+            k_sleep(K_MSEC(600));
+        k_sleep(K_MSEC(100));
+        
+        distance = lidar_read_water_level();
+        // periph_sw_turn_off();
 
-        LOG_INF("Initializing Iridium UART driver...");
+        //========================================================================
+        // 3. Iridium UART setup
+        //========================================================================
+        lowpower_setup_uart2_ENA();
+        if (ENABLE_PRINT)
+            LOG_INF("Initializing Iridium UART driver...");
         int ret = satellite->uart_init();
 
         if (ret != 0) {
             LOG_ERR("satellite->uart_init() failed: %d — powering down and retrying next cycle", ret);
+            satellite->uart_deinit();
             lowpower_setup_uart2_DIS();
             periph_sw_turn_off();
-            k_sleep(K_SECONDS(sleep_duration));
+            k_sleep(K_SECONDS(sleep_duration > 0 ? sleep_duration : astar_params.minRate));
             continue;
         }
 
-        LOG_INF("Iridium UART driver initialized successfully");
+        if (ENABLE_PRINT)
+            LOG_INF("Iridium UART driver initialized successfully");
 
         //====================================================================
-        // 2. LiDAR sensor reading
-        //====================================================================
-        k_sleep(K_SECONDS(20));
-        distance = lidar_read_water_level();
-        // periph_sw_turn_off();
-
-        //====================================================================
-        // 3. AsTAR++ scheduler
+        // 4. AsTAR++ scheduler
         //====================================================================
         if (ENABLE_PRINT)
             LOG_INF("Running AsTAR++ scheduler...");
         sleep_duration = schedule();
 
         //====================================================================
-        // 4. Prepare data frame
+        // 5. Prepare data frame
         //====================================================================
         Vpv = astar_get_vpv_mv();
         build_frame(frame);
         
         //====================================================================
-        // 5. Prepare data frame and transmit it to server
+        // 6. Prepare data frame and transmit it to server
         //====================================================================
-        // k_mutex_lock(&modem_rail_mutex_0, K_FOREVER); 
+        // k_mutex_lock(&modem_rail_mutex, K_FOREVER);
         satellite->send_binary(frame, FRAME_SIZE);
-        // k_mutex_unlock(&modem_rail_mutex_0);
+        // k_mutex_unlock(&modem_rail_mutex);
+
+        //====================================================================
+        // 7. Control charging based on Vpv and open-circuit voltage
+        //====================================================================
+        // Reconnect solar only when Vcap is below the opencircuit threshold because we disable it before reading Vpv
+        // ONLY DO THIS AFTER sending data to avoid the inrush current issue when reconnecting solar panel at high Vpv
         
+        if (newV > astar_get_open_circuit_voltage())
+            disable_charging();
+        else
+            enable_charging();
+
         //====================================================================
-        // 6. Power down peripherals and suspend UART before sleep
+        // 8. Power down peripherals and suspend UART before sleep
         //====================================================================
+        satellite->uart_deinit();      /* stop async RX cleanly before PM suspend */
         lowpower_setup_uart2_DIS();
         periph_sw_turn_off();
         
         //====================================================================
-        // 7. Deep sleep
+        // 9. Deep sleep
         //====================================================================
         if (ENABLE_PRINT)
             LOG_INF("Sleeping for %d s", sleep_duration);
@@ -259,15 +287,17 @@ static void build_frame(uint8_t *frame)
     frame[8] = (uint8_t)(signal_be >> 8);
     frame[9] = (uint8_t)(signal_be & 0xFF);
 
-    LOG_INF("Frame built (%u bytes):", FRAME_SIZE);
-    LOG_INF("  Sleep_time: %u sec", sleep_duration);
-    LOG_INF("  Vcap:       %u mV", newV);
-    LOG_INF("  Vpv:        %u mV", Vpv);
-    LOG_INF("  Sensor:     %u", distance);
-    LOG_INF("  Signal:     %d", signal_quality);
-    LOG_DBG("Frame bytes:");
-    LOG_DBG("  [0-4]: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X",
-            frame[0], frame[1], frame[2], frame[3], frame[4]);
-    LOG_DBG("  [5-9]: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X",
-            frame[5], frame[6], frame[7], frame[8], frame[9]);
+    if (ENABLE_PRINT) {
+        LOG_INF("Frame built (%u bytes):", FRAME_SIZE);
+        LOG_INF("  Sleep_time: %u sec", sleep_duration);
+        LOG_INF("  Vcap:       %u mV", newV);
+        LOG_INF("  Vpv:        %u mV", Vpv);
+        LOG_INF("  Sensor:     %u", distance);
+        LOG_INF("  Signal:     %d", signal_quality);
+        LOG_DBG("Frame bytes:");
+        LOG_DBG("  [0-4]: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X",
+                frame[0], frame[1], frame[2], frame[3], frame[4]);
+        LOG_DBG("  [5-9]: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X",
+                frame[5], frame[6], frame[7], frame[8], frame[9]);
+    }
 }

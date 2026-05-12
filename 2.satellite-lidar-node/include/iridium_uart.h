@@ -30,22 +30,13 @@ extern "C" {
 #define CYCLE_INTERVAL_MS    300000
 
 /** AT basic command timeout (seconds). */
-#define TIMEOUT_AT_S         60
+#define TIMEOUT_AT_S         5
 
 /** AT+SBDWB timeout (seconds). */
-#define TIMEOUT_SBDWB_S      10
+#define TIMEOUT_SBDWB_S      5
 
 /** AT+SBDIX timeout (seconds) — satellite acquisition can be slow. */
-#define TIMEOUT_SBDIX_S      120
-
-/** Sleep time reported in the data frame (seconds). */
-#define SLEEP_TIME           300U
-
-/** Vcap voltage reported in the data frame (mV). */
-#define VCAP                 2900U
-
-/** Vpv voltage reported in the data frame (mV). */
-#define VPV                  5000U
+#define TIMEOUT_SBDIX_S      60     // 120
 
 /** Data frame size (bytes). */
 #define FRAME_SIZE           10U
@@ -102,6 +93,9 @@ typedef struct {
     /** Initialise the UART transport (call once at startup). */
     int              (*uart_init)    (void);
 
+    /** Stop async RX cleanly before PM suspend (call before uart2_DIS). */
+    void             (*uart_deinit)  (void);
+
     /** Send an AT command and block until expected response or timeout. */
     iridium_result_t (*send_cmd)     (const char *cmd,
                                       const char *expected_resp,
@@ -141,6 +135,7 @@ typedef struct {
  * @return  Pointer to the static iridium_t instance; never NULL.
  */
 const iridium_t *iridium_get(void);
+void iridium_uart_deinit(void);
 
 #ifdef __cplusplus
 }

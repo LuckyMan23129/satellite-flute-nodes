@@ -256,12 +256,13 @@ uint16_t lidar_read_water_level(void)
     int32_t  sum      = 0;
     uint16_t distance_cm = 0;
 
+    
     int8_t ret = config_lidar();
     if (ret < 0) {
         LOG_ERR("LIDAR_Lite_v3HP - Failed to configure LiDAR");
         return 59999;
     }
-    
+
     memset(lidar_buff, 0, sizeof(lidar_buff));
     for (uint16_t i = 0; i < RAW_READING_NUMBERS; i++) {
         lidar_buff[i] = distance_data_Func();

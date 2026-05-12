@@ -66,7 +66,6 @@ int8_t lowpower_setup_gpio(void)
 // Disable UART console
 int8_t lowpower_setup_uart0_DIS(void)
 {
-	//static const struct device *const console_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 	/* Disable console UART */
 	err = pm_device_action_run(console_dev0, PM_DEVICE_ACTION_SUSPEND);
 	if (err < 0)
@@ -93,6 +92,9 @@ int8_t lowpower_setup_uart2_DIS(void)
 		return err;
 	}
 
+	/* Turn off to save power (High Speed clock) */
+	NRF_CLOCK->TASKS_HFCLKSTOP = 1;
+	
 	return 0;
 }
 
@@ -110,24 +112,34 @@ int8_t lowpower_setup_uart0_ENA(void)
       LOG_ERR("Unable to RESUME console UART (err: %d)", err);
 	  return err;
     }
+
+	// // Enable UART3 by using Register Accesses
+    // NRF_UARTE0_NS->TASKS_STARTTX = 1;
+    // NRF_UARTE0_NS->TASKS_STARTRX = 1;
+    // NRF_UARTE0_NS->ENABLE = 8;
+
 	return 0;
 }
 
 // Enable UART2
 int8_t lowpower_setup_uart2_ENA(void)
 {
-	// static const struct device *const console_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
-	// Enable UART2 by using Power Management Subsystem  
+    /* Resume the UART2 device via Zephyr PM — this is sufficient to restore
+     * hardware state. The raw register writes that were here previously
+     * (TASKS_STARTRX, TASKS_STARTTX, ENABLE) bypassed the Zephyr async UART
+     * driver's internal state machine and caused uart_rx_enable() to return
+     * -EBUSY on the second cycle. */
     err = pm_device_action_run(console_dev2, PM_DEVICE_ACTION_RESUME);
     if (err < 0)
     {
-      LOG_ERR("Unable to RESUME UART2 (err: %d)", err);
-	  return err;
+        LOG_ERR("Unable to RESUME UART2 (err: %d)", err);
+        return err;
     }
-  
-    // Enable UART2 by using Register Accesses
-      NRF_UARTE2_NS->TASKS_STARTTX = 1;
-      NRF_UARTE2_NS->TASKS_STARTRX = 1;
-      NRF_UARTE2_NS->ENABLE = 8;
-	return 0;
+
+	// // Enable UART3 by using Register Accesses
+    // NRF_UARTE3_NS->TASKS_STARTTX = 1;
+    // NRF_UARTE3_NS->TASKS_STARTRX = 1;
+    // NRF_UARTE3_NS->ENABLE = 8;
+
+    return 0;
 }
