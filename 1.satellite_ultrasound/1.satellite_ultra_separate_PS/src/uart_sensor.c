@@ -83,7 +83,7 @@ K_SEM_DEFINE(uart_rx_disabled_sem, 0, 1);
 #define UART_MAX_RETRIES  (10)
 
 // Get the device pointer of the UART sensor hardware
-const struct device *uart_dev= DEVICE_DT_GET(DT_NODELABEL(uart3));
+const struct device *uart_dev= DEVICE_DT_GET(DT_NODELABEL(uart2));
 
 
 /* uart_cb is only passed to uart_callback_set() — no external linkage needed */

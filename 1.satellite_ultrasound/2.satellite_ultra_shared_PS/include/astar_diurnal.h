@@ -36,6 +36,7 @@ typedef struct {
     uint32_t daily_initial_wakeup_SleepTime;  // Sleep time at first daily wakeup
     uint32_t daily_initial_sleep_SleepTime;   // Sleep time at first daily sleep
     uint32_t nightDurationRollingEstimate;    // Initial EWMA night duration estimate
+    uint16_t safe_floor_margin;         // Safe margin percentage above shutoff voltage to prevent brown-out
 
     // Hardware configuration
     bool USE_BOOST;                   // true if using boost converter
@@ -103,6 +104,7 @@ uint32_t astar_get_max_rate(void);
 uint32_t astar_get_min_rate(void);
 uint32_t astar_get_night_duration_estimate(void);
 bool astar_get_use_boost(void);
+uint16_t astar_get_safe_floor_margin(void);
 
 // ---------------------------------------------------------------------------#
 // Shared Synchronisation Primitives                                          #

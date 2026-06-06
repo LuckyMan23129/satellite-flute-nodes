@@ -79,7 +79,8 @@ static const astar_config_t astar_params = {
     .daily_initial_wakeup_SleepTime = 600,
     .daily_initial_sleep_SleepTime  = 300,
 
-    .nightDurationRollingEstimate = 48000,
+    .nightDurationRollingEstimate = 40000,
+    .safe_floor_margin = 115,  // 15% above shutoff voltage to prevent brown-out
 };
 
 

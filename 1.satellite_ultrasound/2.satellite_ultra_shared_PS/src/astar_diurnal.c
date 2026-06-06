@@ -77,6 +77,7 @@ typedef struct {
     // Daily transition flags
     bool     daily_first_wakeup_flag;
     bool     daily_first_sleep_flag;
+    // const uint16_t safe_floor_margin;        // Safe margin percentage above shutoff voltage to prevent brown-out
 } astar_state_t;
 
 // ---------------------------------------------------------------------------
@@ -149,7 +150,6 @@ void astar_init(const astar_config_t *cfg)
     state.nighttimeVSwing = 0;
     state.daily_first_wakeup_flag = false;
     state.daily_first_sleep_flag = false;
-
     initialized = true;
 }
 
@@ -195,11 +195,11 @@ uint16_t astar_safe_read_vcap(void)
  * shutoff threshold to determine if the system should enter
  * low-power suspension mode.
  *
- * @return true if Vcap <= shutOffVoltage, false otherwise
+ * @return true if the capacitor voltage is at or below the safe threshold, false otherwise
  */
 bool astar_should_suspend(void)
 {
-    return (state.newV <= config.shutOffVoltage);
+    return (state.newV <= (config.shutOffVoltage + (config.shutOffVoltage * (((config.safe_floor_margin - 100) / 2)) / 100)));
 }
 
 
@@ -249,6 +249,7 @@ void overV_protection_thread(void)
         {
             k_mutex_lock(&adc_mutex, K_FOREVER);
             uint16_t  v = config.USE_BOOST ? read_Vcap_mv() : read_Vsupp_mv();
+
             k_mutex_unlock(&adc_mutex);
             bool     did_enable    = false;
             uint16_t solar_snapshot = 0;
@@ -280,13 +281,20 @@ void overV_protection_thread(void)
                     k_sleep(K_MSEC(100));
                 k_mutex_unlock(&modem_rail_mutex);
             }
+
+            if (v <= (config.shutOffVoltage + (config.shutOffVoltage * (((config.safe_floor_margin - 100) / 2)) / 100)))
+                k_sleep(K_SECONDS(600));
+            if ((v <= config.shutOffVoltage) && (state.deltaV < 0) && (!astar_is_nighttime()))
+                k_sleep(K_SECONDS(3600));
+            else if ((v <= config.shutOffVoltage) && (state.deltaV < 0) && (astar_is_nighttime()))
+                k_sleep(K_SECONDS(7200));
         }
 
         // Check less frequently at night to save energy
         if (nighttime)
             k_sleep(K_SECONDS(1800));
         else
-            k_sleep(K_SECONDS(60));
+            k_sleep(K_SECONDS(40));
 
         if (ENABLE_PRINT)
             LOG_INF("+++++++ Escaped OverVcap Protection Thread ++++++++");
@@ -311,7 +319,7 @@ void setSuspensionHandler(void)
                 config.LowVolt_SleepTime);
 
     k_mutex_lock(&vcap_mutex, K_FOREVER);
-    state.sleepTimer = config.LowVolt_SleepTime;
+    state.sleepTimer = 3 * config.LowVolt_SleepTime;
     state.oldV = state.newV;
     k_mutex_unlock(&vcap_mutex);
 
@@ -414,7 +422,7 @@ uint32_t schedule(void)
             {
                 // Record voltage at start of night for discharge planning
                 state.beginSleeping_Vcap = state.newV;
-                uint32_t safety_floor = (config.shutOffVoltage * 11U) / 10U;
+                uint32_t safety_floor = (config.shutOffVoltage * (config.safe_floor_margin) / 100);
                 state.nighttimeVSwing = (state.beginSleeping_Vcap > safety_floor)
                                         ? (state.beginSleeping_Vcap - safety_floor) : 0U;
                 state.daily_first_sleep_flag = true;
@@ -434,7 +442,7 @@ uint32_t schedule(void)
             ((state.nighttimeVSwing * state.timeSinceSunset) / state.nightDurationRollingEstimate);
 
         // Ensure target doesn't go below safety margin
-        uint32_t safety_floor_night = (config.shutOffVoltage * 11U) / 10U;
+        uint32_t safety_floor_night = (config.shutOffVoltage * (config.safe_floor_margin) / 100);
         if (state.optimumV < safety_floor_night)
             state.optimumV = safety_floor_night;
     }
@@ -443,11 +451,11 @@ uint32_t schedule(void)
 
     float kp1, kp2;
     kp1 = (state.newV - state.optimumV) / 50.0f;
-    if (kp1 < 1.5f) kp1 = 1.5f;
+    if (kp1 < 2.0f) kp1 = 2.0f;
     if (kp1 > 4.0f) kp1 = 4.0f;
 
     kp2 = (state.optimumV - state.newV) / 50.0f;
-    if (kp2 < 1.5f) kp2 = 1.5f;
+    if (kp2 < 2.0f) kp2 = 2.0f;
     if (kp2 > 4.0f) kp2 = 4.0f;
 
     // --- Determine Sleep Timer Based on Voltage State ---
@@ -627,4 +635,12 @@ uint32_t astar_get_night_duration_estimate(void) {
  */
 bool astar_get_use_boost(void) {
     return config.USE_BOOST;
+}
+
+/**
+ * @brief Get Safe Margin above the shutoff voltage to prevent brown-out conditions
+ * @return Safe margin in percentage (e.g., 115 means 115% of shutoff voltage)
+ */
+uint16_t astar_get_safe_floor_margin(void) {
+    return config.safe_floor_margin;
 }

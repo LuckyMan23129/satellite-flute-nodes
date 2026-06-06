@@ -41,7 +41,7 @@
 LOG_MODULE_REGISTER(uart_sensor, LOG_LEVEL_INF);
 
 #define SLEEP_TIME_MS2      0
-#define RECEIVE_BUFF_SIZE   8       /* 2× the 4-byte frame so we always capture at least one
+#define RECEIVE_BUFF_SIZE   12       /* 3× the 4-byte frame so we always capture at least one
                                      * complete frame even if RX starts mid-frame. The 0xFF
                                      * start byte is then found by scanning the buffer. */
 #define RECEIVE_TIMEOUT     10000   /* µs — must be > 1 bit-period (104 µs @ 9600 baud)
